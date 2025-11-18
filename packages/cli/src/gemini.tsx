@@ -4,6 +4,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+/**
+ * Qwen Code CLI 应用的主要入口文件
+ * 负责应用的初始化、配置加载、沙箱管理、UI渲染和命令处理
+ */
+
 import React from 'react';
 import { render } from 'ink';
 import { AppContainer } from './ui/AppContainer.js';
@@ -58,6 +63,11 @@ import {
 } from './utils/relaunch.js';
 import { validateNonInteractiveAuth } from './validateNonInterActiveAuth.js';
 
+/**
+ * 验证 DNS 解析顺序设置
+ * @param order DNS解析顺序设置值
+ * @returns 验证后的 DNS 解析顺序
+ */
 export function validateDnsResolutionOrder(
   order: string | undefined,
 ): DnsResolutionOrder {
@@ -75,6 +85,12 @@ export function validateDnsResolutionOrder(
   return defaultValue;
 }
 
+/**
+ * 计算 Node.js 进程的内存参数
+ * 自动配置最大旧空间大小为系统总内存的 50%
+ * @param isDebugMode 是否为调试模式
+ * @returns 内存配置参数数组
+ */
 function getNodeMemoryArgs(isDebugMode: boolean): string[] {
   const totalMemoryMB = os.totalmem() / (1024 * 1024);
   const heapStats = v8.getHeapStatistics();
@@ -110,6 +126,10 @@ import { runZedIntegration } from './zed-integration/zedIntegration.js';
 import { loadSandboxConfig } from './config/sandboxConfig.js';
 import { ExtensionEnablementManager } from './config/extensions/extensionEnablement.js';
 
+/**
+ * 设置未处理的 Promise 拒绝处理器
+ * 用于捕获未处理的异步错误并记录日志
+ */
 export function setupUnhandledRejectionHandler() {
   let unhandledRejectionOccurred = false;
   process.on('unhandledRejection', (reason, _promise) => {
@@ -132,6 +152,15 @@ ${reason.stack}`
   });
 }
 
+/**
+ * 启动交互式 UI 模式
+ * 设置各种 React Context Provider 并渲染主应用容器
+ * @param config 应用配置
+ * @param settings 用户设置
+ * @param startupWarnings 启动警告消息
+ * @param workspaceRoot 工作空间根目录
+ * @param initializationResult 初始化结果
+ */
 export async function startInteractiveUI(
   config: Config,
   settings: LoadedSettings,
@@ -186,6 +215,7 @@ export async function startInteractiveUI(
     },
   );
 
+  // 检查更新并在后台处理自动更新
   checkForUpdates()
     .then((info) => {
       handleAutoUpdate(info, settings, config.getProjectRoot());
@@ -200,16 +230,26 @@ export async function startInteractiveUI(
   registerCleanup(() => instance.unmount());
 }
 
+/**
+ * Qwen Code CLI 应用的主启动函数
+ * 负责整个应用的初始化流程，包括：
+ * 1. 设置加载和参数解析
+ * 2. 沙箱配置和认证处理
+ * 3. 扩展加载
+ * 4. UI 模式或非交互式模式选择
+ */
 export async function main() {
-  setupUnhandledRejectionHandler();
-  const settings = loadSettings();
-  migrateDeprecatedSettings(settings);
-  await cleanupCheckpoints();
-  const sessionId = randomUUID();
+  setupUnhandledRejectionHandler();  // 设置未处理拒绝处理器
+  const settings = loadSettings();   // 加载用户设置
+  migrateDeprecatedSettings(settings); // 迁移废弃的设置
+  await cleanupCheckpoints();       // 清理检查点
+  const sessionId = randomUUID();   // 生成会话ID
 
+  // 解析命令行参数
   const argv = await parseArguments(settings.merged);
 
   // Check for invalid input combinations early to prevent crashes
+  // 验证输入参数组合的有效性
   if (argv.promptInteractive && !process.stdin.isTTY) {
     console.error(
       'Error: The --prompt-interactive flag cannot be used when input is piped from stdin.',
@@ -218,6 +258,7 @@ export async function main() {
   }
 
   const isDebugMode = cliConfig.isDebugMode(argv);
+  // 设置控制台补丁
   const consolePatcher = new ConsolePatcher({
     stderr: true,
     debugMode: isDebugMode,
@@ -225,10 +266,12 @@ export async function main() {
   consolePatcher.patch();
   registerCleanup(consolePatcher.cleanup);
 
+  // 设置 DNS 解析顺序
   dns.setDefaultResultOrder(
     validateDnsResolutionOrder(settings.merged.advanced?.dnsResolutionOrder),
   );
 
+  // 从设置中加载自定义主题
   // Load custom themes from settings
   themeManager.loadCustomThemes(settings.merged.ui?.customThemes);
 
@@ -240,6 +283,8 @@ export async function main() {
     }
   }
 
+  // 沙箱处理逻辑
+  // 进入沙箱（如果当前不在沙箱中且启用了沙箱）
   // hop into sandbox if we are outside and sandboxing is enabled
   if (!process.env['SANDBOX']) {
     const memoryArgs = settings.merged.advanced?.autoConfigureMemory
@@ -265,6 +310,7 @@ export async function main() {
         settings.merged.security?.auth?.selectedType &&
         !settings.merged.security?.auth?.useExternal
       ) {
+        // 验证认证，因为沙箱会干扰 OAuth2 网页重定向
         // Validate authentication here because the sandbox will interfere with the Oauth2 web redirect.
         try {
           const err = validateAuthMethod(
@@ -299,10 +345,12 @@ export async function main() {
             (arg) => arg === '--prompt' || arg === '-p',
           );
           if (promptIndex > -1 && finalArgs.length > promptIndex + 1) {
+            // 如果有 prompt 参数，将标准输入前置到其中
             // If there's a prompt argument, prepend stdin to it
             finalArgs[promptIndex + 1] =
               `${stdinData}\n\n${finalArgs[promptIndex + 1]}`;
           } else {
+            // 如果没有 prompt 参数，将标准输入作为 prompt
             // If there's no prompt argument, add stdin as the prompt
             finalArgs.push('--prompt', stdinData);
           }
@@ -312,21 +360,26 @@ export async function main() {
 
       const sandboxArgs = injectStdinIntoArgs(process.argv, stdinData);
 
+      // 启动沙箱进程
       await relaunchOnExitCode(() =>
         start_sandbox(sandboxConfig, memoryArgs, partialConfig, sandboxArgs),
       );
       process.exit(0);
     } else {
+      // 重启应用，确保有一个可以内部重启的子进程
       // Relaunch app so we always have a child process that can be internally
       // restarted if needed.
       await relaunchAppInChildProcess(memoryArgs, []);
     }
   }
 
+  // 已经处理完可能启动子进程来运行 Qwen Code CLI 的逻辑
+  // 现在可以安全执行可能有副作用的昂贵初始化
   // We are now past the logic handling potentially launching a child process
   // to run Gemini CLI. It is now safe to perform expensive initialization that
   // may have side effects.
   {
+    // 加载扩展和最终配置
     const extensionEnablementManager = new ExtensionEnablementManager(
       ExtensionStorage.getUserExtensionsDir(),
       argv.extensions,
@@ -340,6 +393,7 @@ export async function main() {
       argv,
     );
 
+    // 如果请求列出扩展，则输出已安装的扩展并退出
     if (config.getListExtensions()) {
       console.log('Installed extensions:');
       for (const extension of extensions) {
@@ -351,6 +405,7 @@ export async function main() {
     const wasRaw = process.stdin.isRaw;
     let kittyProtocolDetectionComplete: Promise<boolean> | undefined;
     if (config.isInteractive() && !wasRaw && process.stdin.isTTY) {
+      // 尽早设置为避免输入中出现意外字符
       // Set this as early as possible to avoid spurious characters from
       // input showing up in the output.
       process.stdin.setRawMode(true);
@@ -363,6 +418,7 @@ export async function main() {
         process.stdin.setRawMode(wasRaw);
       });
 
+      // 在启动时检测并启用 Kitty 键盘协议
       // Detect and enable Kitty keyboard protocol once at startup.
       kittyProtocolDetectionComplete = detectAndEnableKittyProtocol();
     }
@@ -371,15 +427,18 @@ export async function main() {
 
     const initializationResult = await initializeApp(config, settings);
 
+    // 如果选择了 Google 登录认证方式且抑制浏览器启动，则预先获取 OAuth 客户端
     if (
       settings.merged.security?.auth?.selectedType ===
         AuthType.LOGIN_WITH_GOOGLE &&
       config.isBrowserLaunchSuppressed()
     ) {
+      // 在应用呈现前执行 OAuth，以便可以复制链接
       // Do oauth before app renders to make copying the link possible.
       await getOauthClient(settings.merged.security.auth.selectedType, config);
     }
 
+    // 如果启用了 Zed 集成，则运行 Zed 集成
     if (config.getExperimentalZedIntegration()) {
       return runZedIntegration(config, settings, extensions, argv);
     }
@@ -394,8 +453,10 @@ export async function main() {
       })),
     ];
 
+    // 渲染 UI，传递必要的配置值。检查是否有命令行问题。
     // Render UI, passing necessary config values. Check that there is no command line question.
     if (config.isInteractive()) {
+      // 需要完成 kitty 检测才能启动交互式 UI
       // Need kitty detection to be complete before we can start the interactive UI.
       await kittyProtocolDetectionComplete;
       await startInteractiveUI(
@@ -410,6 +471,8 @@ export async function main() {
 
     await config.initialize();
 
+    // 如果不是 TTY，则从 stdin 读取
+    // 适用于直接将输入管道到命令的情况
     // If not a TTY, read from stdin
     // This is for cases where the user pipes input directly into the command
     if (!process.stdin.isTTY) {
@@ -446,13 +509,20 @@ export async function main() {
       console.log('Session ID: %s', sessionId);
     }
 
+    // 运行非交互式命令
     await runNonInteractive(nonInteractiveConfig, settings, input, prompt_id);
+    // 在 process.exit 之前调用清理，否则清理不会运行
     // Call cleanup before process.exit, which causes cleanup to not run
     await runExitCleanup();
     process.exit(0);
   }
 }
 
+/**
+ * 设置终端窗口标题
+ * @param title 窗口标题
+ * @param settings 用户设置
+ */
 function setWindowTitle(title: string, settings: LoadedSettings) {
   if (!settings.merged.ui?.hideWindowTitle) {
     const windowTitle = computeWindowTitle(title);
