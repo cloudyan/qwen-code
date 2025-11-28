@@ -25,7 +25,6 @@ import {
   type HistoryItem,
   ToolCallStatus,
   type HistoryItemWithoutId,
-  AuthState,
 } from './types.js';
 import { MessageType, StreamingState } from './types.js';
 import {
@@ -48,7 +47,6 @@ import { useHistory } from './hooks/useHistoryManager.js';
 import { useMemoryMonitor } from './hooks/useMemoryMonitor.js';
 import { useThemeCommand } from './hooks/useThemeCommand.js';
 import { useAuthCommand } from './auth/useAuth.js';
-import { useQwenAuth } from './hooks/useQwenAuth.js';
 import { useQuotaAndFallback } from './hooks/useQuotaAndFallback.js';
 import { useEditorSettings } from './hooks/useEditorSettings.js';
 import { useSettingsCommand } from './hooks/useSettingsCommand.js';
@@ -91,8 +89,10 @@ import { useGitBranchName } from './hooks/useGitBranchName.js';
 import { useExtensionUpdates } from './hooks/useExtensionUpdates.js';
 import { ShellFocusContext } from './contexts/ShellFocusContext.js';
 import { useQuitConfirmation } from './hooks/useQuitConfirmation.js';
+import { t } from '../i18n/index.js';
 import { useWelcomeBack } from './hooks/useWelcomeBack.js';
 import { useDialogClose } from './hooks/useDialogClose.js';
+import { useInitializationAuthError } from './hooks/useInitializationAuthError.js';
 import { type VisionSwitchOutcome } from './components/ModelSwitchDialog.js';
 import { processVisionSwitchOutcome } from './hooks/useVisionAutoSwitch.js';
 import { useSubagentCreateDialog } from './hooks/useSubagentCreateDialog.js';
@@ -349,19 +349,12 @@ export const AppContainer = (props: AppContainerProps) => {
     onAuthError,
     isAuthDialogOpen,
     isAuthenticating,
+    pendingAuthType,
+    qwenAuthState,
     handleAuthSelect,
     openAuthDialog,
-  } = useAuthCommand(settings, config);
-
-  // Qwen OAuth authentication state
-  const {
-    isQwenAuth,
-    isQwenAuthenticating,
-    deviceAuth,
-    authStatus,
-    authMessage,
-    cancelQwenAuth,
-  } = useQwenAuth(settings, isAuthenticating);
+    cancelAuthentication,
+  } = useAuthCommand(settings, config, historyManager.addItem);
 
   const { proQuotaRequest, handleProQuotaChoice } = useQuotaAndFallback({
     config,
@@ -371,19 +364,7 @@ export const AppContainer = (props: AppContainerProps) => {
     setModelSwitchedFromQuotaError,
   });
 
-  // Handle Qwen OAuth timeout
-  const handleQwenAuthTimeout = useCallback(() => {
-    onAuthError('Qwen OAuth authentication timed out. Please try again.');
-    cancelQwenAuth();
-    setAuthState(AuthState.Updating);
-  }, [onAuthError, cancelQwenAuth, setAuthState]);
-
-  // Handle Qwen OAuth cancel
-  const handleQwenAuthCancel = useCallback(() => {
-    onAuthError('Qwen OAuth authentication cancelled.');
-    cancelQwenAuth();
-    setAuthState(AuthState.Updating);
-  }, [onAuthError, cancelQwenAuth, setAuthState]);
+  useInitializationAuthError(initializationResult.authError, onAuthError);
 
   // Sync user tier from config when authentication changes
   // TODO: Implement getUserTier() method on Config if needed
@@ -395,6 +376,8 @@ export const AppContainer = (props: AppContainerProps) => {
 
   // Check for enforced auth type mismatch
   useEffect(() => {
+    // Check for initialization error first
+
     if (
       settings.merged.security?.auth?.enforcedType &&
       settings.merged.security?.auth.selectedType &&
@@ -402,7 +385,13 @@ export const AppContainer = (props: AppContainerProps) => {
         settings.merged.security?.auth.selectedType
     ) {
       onAuthError(
-        `Authentication is enforced to be ${settings.merged.security?.auth.enforcedType}, but you are currently using ${settings.merged.security?.auth.selectedType}.`,
+        t(
+          'Authentication is enforced to be {{enforcedType}}, but you are currently using {{currentType}}.',
+          {
+            enforcedType: settings.merged.security?.auth.enforcedType,
+            currentType: settings.merged.security?.auth.selectedType,
+          },
+        ),
       );
     } else if (
       settings.merged.security?.auth?.selectedType &&
@@ -959,7 +948,7 @@ export const AppContainer = (props: AppContainerProps) => {
     handleApprovalModeSelect,
     isAuthDialogOpen,
     handleAuthSelect,
-    selectedAuthType: settings.merged.security?.auth?.selectedType,
+    pendingAuthType,
     isEditorDialogOpen,
     exitEditorDialog,
     isSettingsDialogOpen,
@@ -1201,7 +1190,7 @@ export const AppContainer = (props: AppContainerProps) => {
     isVisionSwitchDialogOpen ||
     isPermissionsDialogOpen ||
     isAuthDialogOpen ||
-    (isAuthenticating && isQwenAuthenticating) ||
+    isAuthenticating ||
     isEditorDialogOpen ||
     showIdeRestartPrompt ||
     !!proQuotaRequest ||
@@ -1224,12 +1213,9 @@ export const AppContainer = (props: AppContainerProps) => {
       isConfigInitialized,
       authError,
       isAuthDialogOpen,
+      pendingAuthType,
       // Qwen OAuth state
-      isQwenAuth,
-      isQwenAuthenticating,
-      deviceAuth,
-      authStatus,
-      authMessage,
+      qwenAuthState,
       editorError,
       isEditorDialogOpen,
       corgiMode,
@@ -1319,12 +1305,9 @@ export const AppContainer = (props: AppContainerProps) => {
       isConfigInitialized,
       authError,
       isAuthDialogOpen,
+      pendingAuthType,
       // Qwen OAuth state
-      isQwenAuth,
-      isQwenAuthenticating,
-      deviceAuth,
-      authStatus,
-      authMessage,
+      qwenAuthState,
       editorError,
       isEditorDialogOpen,
       corgiMode,
@@ -1418,9 +1401,7 @@ export const AppContainer = (props: AppContainerProps) => {
       handleAuthSelect,
       setAuthState,
       onAuthError,
-      // Qwen OAuth handlers
-      handleQwenAuthTimeout,
-      handleQwenAuthCancel,
+      cancelAuthentication,
       handleEditorSelect,
       exitEditorDialog,
       closeSettingsDialog,
@@ -1454,9 +1435,7 @@ export const AppContainer = (props: AppContainerProps) => {
       handleAuthSelect,
       setAuthState,
       onAuthError,
-      // Qwen OAuth handlers
-      handleQwenAuthTimeout,
-      handleQwenAuthCancel,
+      cancelAuthentication,
       handleEditorSelect,
       exitEditorDialog,
       closeSettingsDialog,
